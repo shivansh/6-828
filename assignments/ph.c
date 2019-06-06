@@ -18,6 +18,10 @@ int keys[NKEYS];
 int nthread = 1;
 volatile int done;
 
+// Maintain a per-bucket lock so that NBUCKET number of threads are running in
+// parallel during put operation.
+pthread_mutex_t lock[NBUCKET];
+
 double now() {
     struct timeval tv;
     gettimeofday(&tv, 0);
@@ -46,6 +50,7 @@ static void insert(int key, int value, struct entry **p, struct entry *n) {
 
 static void put(int key, int value) {
     struct entry *n, **p;
+    pthread_mutex_lock(&lock[key % NBUCKET]);
     for (p = &table[key % NBUCKET], n = table[key % NBUCKET]; n != 0;
          p = &n->next, n = n->next) {
         if (n->key > key) {
@@ -55,6 +60,7 @@ static void put(int key, int value) {
     }
     insert(key, value, p, n);
 done:
+    pthread_mutex_unlock(&lock[key % NBUCKET]);
     return;
 }
 
@@ -113,6 +119,9 @@ int main(int argc, char *argv[]) {
     assert(NKEYS % nthread == 0);
     for (i = 0; i < NKEYS; i++) {
         keys[i] = random();
+    }
+    for (int i = 0; i < NBUCKET; i++) {
+        assert(pthread_mutex_init(&lock[i], NULL) == 0);
     }
     t0 = now();
     for (i = 0; i < nthread; i++) {
