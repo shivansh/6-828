@@ -12,6 +12,7 @@ static int round = 0;
 struct barrier {
     pthread_mutex_t barrier_mutex;
     pthread_cond_t barrier_cond;
+    int exit;     // Set when a round has ended and barrier can be exited
     int nthread;  // Number of threads that have reached this round of the
                   // barrier
     int round;    // Barrier round
@@ -21,32 +22,31 @@ static void barrier_init(void) {
     assert(pthread_mutex_init(&bstate.barrier_mutex, NULL) == 0);
     assert(pthread_cond_init(&bstate.barrier_cond, NULL) == 0);
     bstate.nthread = 0;
+    bstate.exit = 0;
 }
 
-int can_enter = 1;
-
 static void barrier() {
-    // We need to make sure that bstate.nthread is updated only when every
-    // thread from the previous round has exited the barrier. This is ensured
-    // by setting can_enter to 1 when the last thread from previous round
-    // leaves the barrier.
-    while (can_enter == 0)
-        ;
     pthread_mutex_lock(&bstate.barrier_mutex);
     bstate.nthread++;
     if (bstate.nthread != nthread) {
         pthread_cond_wait(&bstate.barrier_cond, &bstate.barrier_mutex);
         // re-acquired the lock
     } else {
+        // A round begins when all threads have reached the barrier.
         bstate.round++;
-        can_enter = 0;
+        bstate.exit = 0;
         pthread_cond_broadcast(&bstate.barrier_cond);
     }
     bstate.nthread--;
     if (bstate.nthread == 0) {
-        can_enter = 1;
+        // Make sure that bstate.nthread is updated in the next round only when
+        // the last thread from current round has exited the barrier.
+        bstate.exit = 1;
     }
     pthread_mutex_unlock(&bstate.barrier_mutex);
+    // FIXME: possible race condition (helgrind)
+    while (bstate.exit == 0)
+        ;
 }
 
 static void *thread(void *xa) {
@@ -57,7 +57,6 @@ static void *thread(void *xa) {
     for (i = 0; i < 20000; i++) {
         int t = bstate.round;
         assert(i == t);
-        fprintf(stderr, "%d %d, i: %d\n", bstate.nthread, bstate.round, i);
         barrier();
         usleep(random() % 100);
     }
