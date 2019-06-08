@@ -23,7 +23,31 @@ static void barrier_init(void) {
     bstate.nthread = 0;
 }
 
-static void barrier() { bstate.round++; }
+int can_enter = 1;
+
+static void barrier() {
+    // We need to make sure that bstate.nthread is updated only when every
+    // thread from the previous round has exited the barrier. This is ensured
+    // by setting can_enter to 1 when the last thread from previous round
+    // leaves the barrier.
+    while (can_enter == 0)
+        ;
+    pthread_mutex_lock(&bstate.barrier_mutex);
+    bstate.nthread++;
+    if (bstate.nthread != nthread) {
+        pthread_cond_wait(&bstate.barrier_cond, &bstate.barrier_mutex);
+        // re-acquired the lock
+    } else {
+        bstate.round++;
+        can_enter = 0;
+        pthread_cond_broadcast(&bstate.barrier_cond);
+    }
+    bstate.nthread--;
+    if (bstate.nthread == 0) {
+        can_enter = 1;
+    }
+    pthread_mutex_unlock(&bstate.barrier_mutex);
+}
 
 static void *thread(void *xa) {
     long n = (long)xa;
@@ -33,6 +57,7 @@ static void *thread(void *xa) {
     for (i = 0; i < 20000; i++) {
         int t = bstate.round;
         assert(i == t);
+        fprintf(stderr, "%d %d, i: %d\n", bstate.nthread, bstate.round, i);
         barrier();
         usleep(random() % 100);
     }
